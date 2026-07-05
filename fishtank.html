@@ -21,6 +21,7 @@
     --fish-mint: #6fd0a8;
     --fish-silver: #c2d2de;
     --fish-big: #b48ae0;
+    --crab: #e0564a;
     --chrome: #3a5566;
     --chrome-bright: #6f95a8;
     --food: #e0cfa0;
@@ -94,6 +95,7 @@
   .f3 { color: var(--fish-mint);   text-shadow: 0 0 8px rgba(111,208,168,0.35); }
   .f4 { color: var(--fish-silver); text-shadow: 0 0 8px rgba(194,210,222,0.30); }
   .f5 { color: var(--fish-big);    text-shadow: 0 0 10px rgba(180,138,224,0.45); }
+  .cr { color: var(--crab);        text-shadow: 0 0 8px rgba(224,86,74,0.40); }
   .p  { color: var(--food); }
   @media (max-width: 700px) {
     pre { font-size: 11px; }
@@ -102,10 +104,10 @@
 
 <div class="rig">
   <header>
-    <span class="name">fishtank v1.1</span>
+    <span class="name">fishtank v1.2</span>
     <span class="tele">temp 24.1°C &nbsp; ph 7.2 &nbsp; o₂ ok</span>
   </header>
-  <div class="tankwrap" id="wrap" tabindex="0" role="img" aria-label="Animated ASCII art fishtank: fish swim among rising bubbles, swaying seaweed, and a treasure chest, while a big fish occasionally hunts and swallows a smaller one. Click or press Enter to drop food.">
+  <div class="tankwrap" id="wrap" tabindex="0" role="img" aria-label="Animated ASCII art fishtank: fish swim among rising bubbles, swaying seaweed, and a treasure chest, while a big fish occasionally hunts and swallows a smaller one and a crab patrols the gravel eating fallen crumbs. Click or press Enter to drop food.">
     <pre id="tank" aria-hidden="true"></pre>
   </div>
   <footer>
@@ -133,6 +135,8 @@
   let pred = null;   // the big fish
   let gulps = 0;
   let respawns = []; // countdown ticks until an eaten fish re-enters
+  let crab = null;   // gravel janitor
+  let crumbs = [];   // {x, ttl} — flakes that reached the bottom
 
   const SPRITES = [
     { r: '><(((º>', l: '<º)))><' },
@@ -147,6 +151,9 @@
   };
   const FLEE_R = 11;   // small fish panic inside this radius
   const HUNT_SPEED = 3.4, FLEE_SPEED = 1.45;
+
+  const CRAB = { a: '(\\/)°.°(\\/)', b: '(/\\)°.°(/\\)' };
+  const CRAB_W = CRAB.a.length;
 
   const CHEST = [
     '  ____  ',
@@ -233,6 +240,14 @@
       hunger: 250,     // ticks until the next hunt
       stamina: 0,      // remaining hunt ticks before giving up
       fed: 0,          // belly-bulge timer
+    };
+  }
+
+  function seedCrab() {
+    crab = {
+      x: Math.floor(W * 0.3),
+      dir: 1,
+      pause: 0,
     };
   }
 
@@ -356,6 +371,39 @@
       if (pred.vx < 0 && pred.x < -wSpr - 3) pred.x = W + 3;
     }
 
+    // The crab patrols the gravel and tidies up crumbs.
+    if (crab) {
+      const claw = crab.x + CRAB_W / 2;
+      let snack = null, best = 1e9;
+      for (const c of crumbs) {
+        const d = Math.abs(c.x - claw);
+        if (d < best) { best = d; snack = c; }
+      }
+      if (crab.pause > 0 && !snack) {
+        crab.pause--;
+      } else {
+        let sp = 0.12;
+        if (snack) {
+          crab.dir = Math.sign(snack.x - claw) || crab.dir;
+          sp = 0.32;
+          if (best < 2) {
+            crumbs.splice(crumbs.indexOf(snack), 1);
+            bubbles.push({ x: claw, y: H - 4, phase: Math.random() * 6, age: 0 });
+            crab.pause = 25;
+          }
+        } else {
+          if (Math.random() < 0.005) crab.dir *= -1;
+          if (Math.random() < 0.008) crab.pause = 30 + Math.random() * 60;
+        }
+        crab.x += crab.dir * sp;
+        if (crab.x < 1) { crab.x = 1; crab.dir = 1; }
+        if (crab.x > W - CRAB_W - 1) { crab.x = W - CRAB_W - 1; crab.dir = -1; }
+      }
+    }
+    for (let i = crumbs.length - 1; i >= 0; i--) {
+      if (--crumbs[i].ttl <= 0) crumbs.splice(i, 1);
+    }
+
     // Eaten fish quietly return from the edges once the coast is clear.
     for (let i = respawns.length - 1; i >= 0; i--) {
       if (--respawns[i] <= 0) {
@@ -377,7 +425,10 @@
       const fl = flakes[i];
       fl.y += 0.12;
       fl.x += Math.sin(t * 0.1 + fl.phase) * 0.08;
-      if (fl.y >= H - 3) flakes.splice(i, 1);
+      if (fl.y >= H - 3) {
+        if (crumbs.length < 12) crumbs.push({ x: fl.x, ttl: 300 });
+        flakes.splice(i, 1);
+      }
     }
   }
 
@@ -420,8 +471,9 @@
       }
     }
 
-    // Food.
+    // Food, and crumbs resting on the gravel.
     for (const fl of flakes) put(grid, fl.x, fl.y, '*', 'p');
+    for (const c of crumbs) put(grid, c.x, H - 3, '.', 'p');
 
     // Fish (drawn above scenery).
     for (const f of fishes) {
@@ -435,6 +487,12 @@
       const y = pred.baseY + pred.drift + Math.sin(t * pred.wob + pred.phase) * 0.8;
       const s = pred.vx > 0 ? (pred.fed > 0 ? BIG.rFed : BIG.r) : (pred.fed > 0 ? BIG.lFed : BIG.l);
       putText(grid, pred.x, Math.max(2, Math.min(H - 4, y)), s, 'f5');
+    }
+
+    // The crab, front and center on the gravel.
+    if (crab) {
+      const s = Math.floor(t / 6) % 2 === 0 ? CRAB.a : CRAB.b;
+      putText(grid, crab.x, H - 3, s, 'cr');
     }
 
     // Bubbles on top.
@@ -501,6 +559,7 @@
   sizeGrid();
   seedFish();
   seedPred();
+  seedCrab();
 
   if (reduced) {
     // One composed still frame, no loop.
