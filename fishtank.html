@@ -20,6 +20,7 @@
     --fish-coral: #e8735a;
     --fish-mint: #6fd0a8;
     --fish-silver: #c2d2de;
+    --fish-big: #b48ae0;
     --chrome: #3a5566;
     --chrome-bright: #6f95a8;
     --food: #e0cfa0;
@@ -92,6 +93,7 @@
   .f2 { color: var(--fish-coral);  text-shadow: 0 0 8px rgba(232,115,90,0.35); }
   .f3 { color: var(--fish-mint);   text-shadow: 0 0 8px rgba(111,208,168,0.35); }
   .f4 { color: var(--fish-silver); text-shadow: 0 0 8px rgba(194,210,222,0.30); }
+  .f5 { color: var(--fish-big);    text-shadow: 0 0 10px rgba(180,138,224,0.45); }
   .p  { color: var(--food); }
   @media (max-width: 700px) {
     pre { font-size: 11px; }
@@ -103,7 +105,7 @@
     <span class="name">fishtank v1.0</span>
     <span class="tele">temp 24.1°C &nbsp; ph 7.2 &nbsp; o₂ ok</span>
   </header>
-  <div class="tankwrap" id="wrap" tabindex="0" role="img" aria-label="Animated ASCII art fishtank: fish swim among rising bubbles, swaying seaweed, and a treasure chest. Click or press Enter to drop food.">
+  <div class="tankwrap" id="wrap" tabindex="0" role="img" aria-label="Animated ASCII art fishtank: fish swim among rising bubbles, swaying seaweed, and a treasure chest, while a big fish occasionally hunts and swallows a smaller one. Click or press Enter to drop food.">
     <pre id="tank" aria-hidden="true"></pre>
   </div>
   <footer>
@@ -128,6 +130,9 @@
   let fishes = [];
   let bubbles = [];  // {x, y, vy, phase, age}
   let flakes = [];   // {x, y, phase}
+  let pred = null;   // the big fish
+  let gulps = 0;
+  let respawns = []; // countdown ticks until an eaten fish re-enters
 
   const SPRITES = [
     { r: '><(((º>', l: '<º)))><' },
@@ -135,6 +140,13 @@
     { r: '><>',     l: '<><'     },
   ];
   const COLORS = ['f1', 'f2', 'f3', 'f4'];
+
+  const BIG = {
+    r:    '><((((((((º>',  l:    '<º))))))))><',
+    rFed: '><((((@((((º>', lFed: '<º))))@))))><',
+  };
+  const FLEE_R = 11;   // small fish panic inside this radius
+  const HUNT_SPEED = 3.4, FLEE_SPEED = 1.45;
 
   const CHEST = [
     '  ____  ',
@@ -186,24 +198,42 @@
     for (const f of fishes) {
       f.baseY = Math.min(f.baseY, H - 6);
     }
+    if (pred) pred.baseY = Math.min(pred.baseY, H - 7);
+  }
+
+  function makeFish(i, fromEdge) {
+    const sprite = SPRITES[i % SPRITES.length];
+    const dir = Math.random() < 0.5 ? 1 : -1;
+    return {
+      sprite,
+      cls: COLORS[i % COLORS.length],
+      x: fromEdge ? (dir > 0 ? -sprite.r.length - 2 : W + 2) : Math.random() * W,
+      baseY: 3 + Math.random() * (H - 10),
+      vx: dir * (0.25 + Math.random() * 0.3),
+      wob: 0.04 + Math.random() * 0.05,
+      phase: Math.random() * Math.PI * 2,
+      drift: 0,
+    };
   }
 
   function seedFish() {
     fishes = [];
-    for (let i = 0; i < 7; i++) {
-      const sprite = SPRITES[i % SPRITES.length];
-      const dir = Math.random() < 0.5 ? 1 : -1;
-      fishes.push({
-        sprite,
-        cls: COLORS[i % COLORS.length],
-        x: Math.random() * W,
-        baseY: 3 + Math.random() * (H - 10),
-        vx: dir * (0.25 + Math.random() * 0.3),
-        wob: 0.04 + Math.random() * 0.05,
-        phase: Math.random() * Math.PI * 2,
-        drift: 0,
-      });
-    }
+    for (let i = 0; i < 7; i++) fishes.push(makeFish(i, false));
+  }
+
+  function seedPred() {
+    pred = {
+      x: -BIG.r.length - 4,
+      baseY: 4 + Math.random() * (H - 12),
+      vx: 0.18,
+      drift: 0,
+      wob: 0.025,
+      phase: Math.random() * Math.PI * 2,
+      mode: 'cruise',
+      hunger: 250,     // ticks until the next hunt
+      stamina: 0,      // remaining hunt ticks before giving up
+      fed: 0,          // belly-bulge timer
+    };
   }
 
   function blank() {
@@ -236,13 +266,24 @@
     // Fish
     for (const f of fishes) {
       let speed = f.vx;
+      // Panic beats appetite: flee if the big fish is close.
+      const px = pred ? pred.x + BIG.r.length / 2 : -1e9;
+      const py = pred ? pred.baseY + pred.drift : 0;
+      const fy = f.baseY + f.drift;
+      const fleeing = pred && Math.abs(f.x - px) < FLEE_R && Math.abs(fy - py) < 5;
       // Chase the nearest flake if one is close.
       let target = null, best = 1e9;
       for (const fl of flakes) {
         const d = Math.abs(fl.x - f.x) + Math.abs(fl.y - (f.baseY + f.drift)) * 2;
         if (d < best && d < 50) { best = d; target = fl; }
       }
-      if (target) {
+      if (fleeing) {
+        const away = Math.sign(f.x - px) || 1;
+        f.vx = away * Math.abs(f.vx);
+        speed = f.vx * FLEE_SPEED;
+        f.drift += Math.sign(fy - py || 1) * 0.18;
+        f.drift = Math.max(2 - f.baseY, Math.min(H - 5 - f.baseY, f.drift));
+      } else if (target) {
         const want = Math.sign(target.x - f.x) || f.vx > 0 ? Math.sign(target.x - f.x) : 1;
         if (want !== 0) f.vx = want * Math.abs(f.vx);
         speed = f.vx * 1.8;
@@ -262,6 +303,64 @@
       // Fish blow a bubble now and then.
       if ((t + Math.floor(f.phase * 40)) % 130 === 0) {
         bubbles.push({ x: f.vx > 0 ? f.x + wSpr : f.x, y: f.baseY + f.drift - 1, phase: Math.random() * 6, age: 0 });
+      }
+    }
+
+    // The big fish: cruise until hungry, then hunt the nearest small fish.
+    if (pred) {
+      let speed = pred.vx;
+      if (pred.fed > 0) pred.fed--;
+      if (pred.mode === 'cruise') {
+        pred.hunger--;
+        pred.drift *= 0.99;
+        if (pred.hunger <= 0 && fishes.length > 2) {
+          pred.mode = 'hunt';
+          pred.stamina = 200;
+        }
+      } else {
+        pred.stamina--;
+        let prey = null, best = 1e9;
+        for (const f of fishes) {
+          const d = Math.abs(f.x - pred.x) + Math.abs((f.baseY + f.drift) - (pred.baseY + pred.drift)) * 2;
+          if (d < best) { best = d; prey = f; }
+        }
+        if (!prey || pred.stamina <= 0 || fishes.length <= 2) {
+          pred.mode = 'cruise';
+          pred.hunger = 200 + Math.random() * 200;
+        } else {
+          const preyX = prey.x + prey.sprite.r.length / 2;
+          const preyY = prey.baseY + prey.drift;
+          const want = Math.sign(preyX - pred.x - BIG.r.length / 2);
+          if (want !== 0) pred.vx = want * Math.abs(pred.vx);
+          speed = pred.vx * HUNT_SPEED;
+          pred.drift += (preyY - pred.baseY - pred.drift) * 0.07;
+          const mouthX = pred.vx > 0 ? pred.x + BIG.r.length : pred.x;
+          const mouthY = pred.baseY + pred.drift;
+          if (Math.abs(preyX - mouthX) < 3 && Math.abs(preyY - mouthY) < 1.8) {
+            fishes.splice(fishes.indexOf(prey), 1);
+            gulps++;
+            respawns.push(110 + Math.floor(Math.random() * 110));
+            for (let k = 0; k < 4; k++) {
+              bubbles.push({ x: mouthX + (Math.random() * 4 - 2), y: mouthY - 1, phase: Math.random() * 6, age: 0 });
+            }
+            pred.fed = 70;
+            pred.mode = 'cruise';
+            pred.hunger = 350 + Math.random() * 350;
+            flash('gulp!');
+          }
+        }
+      }
+      pred.x += speed;
+      const wSpr = BIG.rFed.length;
+      if (pred.vx > 0 && pred.x > W + 3) pred.x = -wSpr - 3;
+      if (pred.vx < 0 && pred.x < -wSpr - 3) pred.x = W + 3;
+    }
+
+    // Eaten fish quietly return from the edges once the coast is clear.
+    for (let i = respawns.length - 1; i >= 0; i--) {
+      if (--respawns[i] <= 0) {
+        respawns.splice(i, 1);
+        fishes.push(makeFish(Math.floor(Math.random() * SPRITES.length * COLORS.length), true));
       }
     }
 
@@ -331,6 +430,13 @@
       putText(grid, f.x, Math.max(2, Math.min(H - 4, y)), s, f.cls);
     }
 
+    // The big fish, above everyone else.
+    if (pred) {
+      const y = pred.baseY + pred.drift + Math.sin(t * pred.wob + pred.phase) * 0.8;
+      const s = pred.vx > 0 ? (pred.fed > 0 ? BIG.rFed : BIG.r) : (pred.fed > 0 ? BIG.lFed : BIG.l);
+      putText(grid, pred.x, Math.max(2, Math.min(H - 4, y)), s, 'f5');
+    }
+
     // Bubbles on top.
     for (const b of bubbles) {
       const x = b.x + Math.sin(b.y * 0.5 + b.phase) * 1.2;
@@ -358,7 +464,13 @@
       html += '\n';
     }
     pre.innerHTML = html;
-    census.textContent = 'fish ' + fishes.length + '   bubbles ' + bubbles.length;
+    census.textContent = 'fish ' + fishes.length + '   bubbles ' + bubbles.length + '   gulps ' + gulps;
+  }
+
+  function flash(msg) {
+    hint.textContent = msg;
+    clearTimeout(flash._t);
+    flash._t = setTimeout(() => { hint.textContent = 'click tank to feed'; }, 2500);
   }
 
   function feed(clientX) {
@@ -368,9 +480,7 @@
     for (let i = 0; i < 5; i++) {
       flakes.push({ x: gx + (Math.random() * 6 - 3), y: 1 + Math.random() * 1.5, phase: Math.random() * 6 });
     }
-    hint.textContent = 'feeding…';
-    clearTimeout(feed._t);
-    feed._t = setTimeout(() => { hint.textContent = 'click tank to feed'; }, 2500);
+    flash('feeding…');
   }
 
   wrap.addEventListener('click', (e) => feed(e.clientX));
@@ -390,6 +500,7 @@
 
   sizeGrid();
   seedFish();
+  seedPred();
 
   if (reduced) {
     // One composed still frame, no loop.
