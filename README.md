@@ -19,9 +19,14 @@ no dependencies.
 | Seaweed | Sways on independent sine rhythms |
 | Surface / gravel / chest | Rippling `~` water line, static seeded gravel bed, bubbling treasure chest |
 
-**Interaction:** click the tank (or focus it and press Enter/Space) to drop food
+**Interaction:** click the tank (or focus it and press Enter) to drop food
 flakes. Fish chase them — unless the predator is nearby, in which case the food
-sinks to the crab. Footer census tracks `fish / bubbles / gulps`.
+sinks to the crab. Press and hold the tank (or hold Space) for 250ms to tap the
+glass instead: an expanding ripple ring follows your pointer (or the tank
+center, for the keyboard), nearby fish startle away from it, the crab wanders
+over to investigate, and any jellyfish under the tap contracts early and
+pulses rapidly while you hold. A quick press/click still feeds; only a
+sustained hold taps. Footer census tracks `fish / bubbles / gulps`.
 
 Respects `prefers-reduced-motion` (renders a composed still frame instead of
 animating).
@@ -34,6 +39,7 @@ animating).
 | v1.1 | `v1.1` | Predator: big fish hunts and swallows smaller fish; prey flee; eaten fish respawn from the edges; `gulps` counter |
 | v1.2 | `v1.2` | Crab: patrols the gravel; uneaten flakes become crumbs it cleans up |
 | v1.3 | `v1.3` | Jellyfish: two pink jellies pulse and drift through the mid-water, occasionally releasing a bubble |
+| v1.4 | `v1.4` | Tap the glass: press-and-hold startles nearby fish, draws the crab, makes jellyfish pulse; expanding ripple rings |
 
 ## How it works (for future upgrades)
 

@@ -106,15 +106,15 @@
 
 <div class="rig">
   <header>
-    <span class="name">fishtank v1.3</span>
+    <span class="name">fishtank v1.4</span>
     <span class="tele">temp 24.1°C &nbsp; ph 7.2 &nbsp; o₂ ok</span>
   </header>
-  <div class="tankwrap" id="wrap" tabindex="0" role="img" aria-label="Animated ASCII art fishtank: fish swim among rising bubbles, swaying seaweed, and a treasure chest, while a big fish occasionally hunts and swallows a smaller one, a crab patrols the gravel eating fallen crumbs, and jellyfish pulse and drift through the mid-water. Click or press Enter to drop food.">
+  <div class="tankwrap" id="wrap" tabindex="0" role="img" aria-label="Animated ASCII art fishtank: fish swim among rising bubbles, swaying seaweed, and a treasure chest, while a big fish occasionally hunts and swallows a smaller one, a crab patrols the gravel eating fallen crumbs, and jellyfish pulse and drift through the mid-water. Click to drop food; press and hold (or hold Space) to tap the glass — nearby fish startle, the crab investigates, and jellyfish pulse.">
     <pre id="tank" aria-hidden="true"></pre>
   </div>
   <footer>
     <span id="census">fish 7 &nbsp; bubbles 0</span>
-    <span id="hint">click tank to feed</span>
+    <span id="hint">click to feed · hold to tap the glass</span>
   </footer>
 </div>
 
@@ -140,6 +140,11 @@
   let crab = null;   // gravel janitor
   let crumbs = [];   // {x, ttl} — flakes that reached the bottom
   let jellies = [];  // {x, y, vx, phase, wander, puff}
+  let tap = null;     // {x, y} grid point while the glass is being tapped, else null
+  let ripples = [];   // {x, y, r} expanding rings from a tap
+  let holdTimer = null;
+  let downClientX = 0, downClientY = 0;
+  let tapTick = 0;    // ticks since the current tap activated, for ripple spacing
 
   const SPRITES = [
     { r: '><(((º>', l: '<º)))><' },
@@ -180,7 +185,7 @@
     const r = probe.getBoundingClientRect();
     cellW = r.width / 10;
     const style = getComputedStyle(pre);
-    cellH = parseFloat(style.fontSize) * parseFloat(style.lineHeight) || r.height;
+    cellH = parseFloat(style.lineHeight) || r.height;
     pre.removeChild(probe);
   }
 
@@ -189,6 +194,7 @@
     const inner = wrap.clientWidth - 16;
     W = Math.max(48, Math.min(116, Math.floor(inner / cellW)));
     H = window.innerWidth < 700 ? 26 : 32;
+    tap = null;
     seedScenery();
   }
 
@@ -315,6 +321,8 @@
       const py = pred ? pred.baseY + pred.drift : 0;
       const fy = f.baseY + f.drift;
       const fleeing = pred && Math.abs(f.x - px) < FLEE_R && Math.abs(fy - py) < 5;
+      // A tapped-on fish startles too, but the predator always wins its attention.
+      const tapFleeing = !fleeing && tap && Math.abs(f.x - tap.x) < 9 && Math.abs(fy - tap.y) < 5;
       // Chase the nearest flake if one is close.
       let target = null, best = 1e9;
       for (const fl of flakes) {
@@ -326,6 +334,12 @@
         f.vx = away * Math.abs(f.vx);
         speed = f.vx * FLEE_SPEED;
         f.drift += Math.sign(fy - py || 1) * 0.18;
+        f.drift = Math.max(2 - f.baseY, Math.min(H - 5 - f.baseY, f.drift));
+      } else if (tapFleeing) {
+        const away = Math.sign(f.x - tap.x) || 1;
+        f.vx = away * Math.abs(f.vx);
+        speed = f.vx * FLEE_SPEED;
+        f.drift += Math.sign(fy - tap.y || 1) * 0.18;
         f.drift = Math.max(2 - f.baseY, Math.min(H - 5 - f.baseY, f.drift));
       } else if (target) {
         const want = Math.sign(target.x - f.x) || f.vx > 0 ? Math.sign(target.x - f.x) : 1;
@@ -408,7 +422,8 @@
         const d = Math.abs(c.x - claw);
         if (d < best) { best = d; snack = c; }
       }
-      if (crab.pause > 0 && !snack) {
+      const tapNear = tap && tap.y >= H - 9;
+      if (crab.pause > 0 && !snack && !tapNear) {
         crab.pause--;
       } else {
         let sp = 0.12;
@@ -420,6 +435,10 @@
             bubbles.push({ x: claw, y: H - 4, phase: Math.random() * 6, age: 0 });
             crab.pause = 25;
           }
+        } else if (tapNear) {
+          // Investigates the tap, but doesn't "eat" it — just hangs around under it.
+          crab.dir = Math.sign(tap.x - claw) || crab.dir;
+          sp = 0.32;
         } else {
           if (Math.random() < 0.005) crab.dir *= -1;
           if (Math.random() < 0.008) crab.pause = 30 + Math.random() * 60;
@@ -435,6 +454,11 @@
 
     // Jellyfish: contract to kick upward, then drift back down while open.
     for (const j of jellies) {
+      // A tap near the bell restarts the beat so it contracts right now.
+      if (tap && Math.abs(tap.x - (j.x + 2)) < 5 && Math.abs(tap.y - (j.y + 1)) < 4) {
+        const cur = (t + j.phase) % JELLY_BEAT;
+        if (cur >= JELLY_KICK) j.phase = (JELLY_BEAT - (t % JELLY_BEAT)) % JELLY_BEAT;
+      }
       const beat = (t + j.phase) % JELLY_BEAT;
       j.puff = beat < JELLY_KICK;
       j.y += j.puff ? -0.22 : 0.045;
@@ -473,6 +497,16 @@
         if (crumbs.length < 12) crumbs.push({ x: fl.x, ttl: 300 });
         flakes.splice(i, 1);
       }
+    }
+
+    // Ripples spread from a tap on the glass, then fade.
+    if (tap) {
+      tapTick++;
+      if (tapTick % 18 === 0) ripples.push({ x: tap.x, y: tap.y, r: 0 });
+    }
+    for (let i = ripples.length - 1; i >= 0; i--) {
+      ripples[i].r += 0.45;
+      if (ripples[i].r > 7) ripples.splice(i, 1);
     }
   }
 
@@ -545,6 +579,12 @@
       putText(grid, crab.x, H - 3, s, 'cr');
     }
 
+    // Ripples spreading from a tap on the glass.
+    for (const rp of ripples) {
+      put(grid, rp.x - rp.r, rp.y, '(', 'b');
+      put(grid, rp.x + rp.r, rp.y, ')', 'b');
+    }
+
     // Bubbles on top.
     for (const b of bubbles) {
       const x = b.x + Math.sin(b.y * 0.5 + b.phase) * 1.2;
@@ -578,7 +618,16 @@
   function flash(msg) {
     hint.textContent = msg;
     clearTimeout(flash._t);
-    flash._t = setTimeout(() => { hint.textContent = 'click tank to feed'; }, 2500);
+    flash._t = setTimeout(() => { hint.textContent = 'click to feed · hold to tap the glass'; }, 2500);
+  }
+
+  function gridPointFromClient(clientX, clientY) {
+    const rect = wrap.getBoundingClientRect();
+    let gx = Math.round((clientX - rect.left - 8) / cellW);
+    let gy = Math.round((clientY - rect.top - 10) / cellH);
+    gx = Math.max(2, Math.min(W - 3, gx));
+    gy = Math.max(1, Math.min(H - 3, gy));
+    return { x: gx, y: gy };
   }
 
   function feed(clientX) {
@@ -591,12 +640,56 @@
     flash('feeding…');
   }
 
-  wrap.addEventListener('click', (e) => feed(e.clientX));
+  // A quick press feeds; a 250ms hold activates tap mode instead.
+  wrap.addEventListener('mousedown', (e) => {
+    downClientX = e.clientX;
+    downClientY = e.clientY;
+    clearTimeout(holdTimer);
+    holdTimer = setTimeout(() => {
+      tap = gridPointFromClient(downClientX, downClientY);
+      tapTick = 0;
+      ripples.push({ x: tap.x, y: tap.y, r: 0 });
+      flash('tap tap');
+    }, 250);
+  });
+  wrap.addEventListener('mousemove', (e) => {
+    if (tap) tap = gridPointFromClient(e.clientX, e.clientY);
+  });
+  wrap.addEventListener('mouseup', (e) => {
+    clearTimeout(holdTimer);
+    if (tap) tap = null;
+    else feed(e.clientX);
+  });
+  wrap.addEventListener('mouseleave', () => {
+    clearTimeout(holdTimer);
+    tap = null;
+  });
   wrap.addEventListener('keydown', (e) => {
-    if (e.key === 'Enter' || e.key === ' ') {
+    if (e.key === 'Enter') {
       e.preventDefault();
       const rect = wrap.getBoundingClientRect();
       feed(rect.left + rect.width / 2);
+    } else if (e.key === ' ') {
+      e.preventDefault();
+      if (e.repeat) return;
+      clearTimeout(holdTimer);
+      holdTimer = setTimeout(() => {
+        tap = { x: Math.max(2, Math.min(W - 3, Math.round(W / 2))), y: Math.max(1, Math.min(H - 3, Math.round(H / 2))) };
+        tapTick = 0;
+        ripples.push({ x: tap.x, y: tap.y, r: 0 });
+        flash('tap tap');
+      }, 250);
+    }
+  });
+  wrap.addEventListener('keyup', (e) => {
+    if (e.key === ' ') {
+      clearTimeout(holdTimer);
+      if (tap) {
+        tap = null;
+      } else {
+        const rect = wrap.getBoundingClientRect();
+        feed(rect.left + rect.width / 2);
+      }
     }
   });
 
